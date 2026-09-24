@@ -35,7 +35,8 @@
     PATCH 2026-09-23 — MOBILE AIM: мишень 140px+, sticky x1.6, приоритет после
       камеры, жёсткий lerp — не откидывает
     PATCH 2026-09-23 — MOB TAB: отдельный Aimbot Mobile (центр, лок головы,
-      свой круг, свой цикл; ПК-аим не тронут)
+      свой цикл; ПК-аим не тронут)
+    PATCH 2026-09-23 — MOB SIMPLE: круга и мишени нет, держит ближайшую голову
     PATCH 2026-09-23 — PHONE FIX: прицел/наводка всегда по центру на таче
       (фальшивая мышь экзекутора больше не уводит)
     PATCH 2026-09-23 — AIM DIAG: fallback центра на таче, счётчики pl/fov/blk,
@@ -4809,9 +4810,7 @@ end
                         if on and sp.Z > 0 then
                             local dx, dy = sp.X - cx, sp.Y - cy
                             local mag = math.sqrt(dx * dx + dy * dy) + c.bonus
-                            local lim = MobAim.Radius
-                            if player == MobAim.LastTarget then lim = lim * 1.6 end
-                            if mag < lim and (not bestMag or mag < bestMag) then
+                            if not bestMag or mag < bestMag then
                                 if not MobAim.VisCheck or not mobOccluded(camPos, c.part.Position, char) then
                                     best, bestPart, bestMag = player, c.part, mag
                                 end
@@ -4824,49 +4823,13 @@ end
         return best, bestPart
     end
 
-    function mobCircle()
-        local show = MobAim.Enabled and MobAim.ShowCircle
-        if not show then
-            if MobAim.Frame then pcall(function() MobAim.Frame.Visible = false end) end
-            return
-        end
+    function mobMagOf(part, cx, cy)
         local cam = Camera or workspace.CurrentCamera
-        if not cam then return end
-        if not MobAim.Frame or not MobAim.Frame.Parent then
-            pcall(function() if MobAim.Frame then MobAim.Frame:Destroy() end end)
-            if not MobAim.Gui or not MobAim.Gui.Parent then
-                local parent = getGuiParent()
-                if not parent then return end
-                MobAim.Gui = Instance.new("ScreenGui")
-                MobAim.Gui.Name = "LuaHubMobAim"
-                MobAim.Gui.ResetOnSpawn = false
-                MobAim.Gui.IgnoreGuiInset = true
-                MobAim.Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-                pcall(function() MobAim.Gui.Parent = parent end)
-            end
-            local f = Instance.new("Frame")
-            f.Name = "MobCircle"
-            f.BackgroundTransparency = 1
-            f.BorderSizePixel = 0
-            f.AnchorPoint = Vector2.new(0.5, 0.5)
-            f.ZIndex = 10
-            local corner = Instance.new("UICorner")
-            corner.CornerRadius = UDim.new(1, 0)
-            corner.Parent = f
-            local stroke = Instance.new("UIStroke")
-            stroke.Thickness = 2
-            stroke.Color = Color3.fromRGB(0, 220, 110)
-            stroke.Transparency = 0.2
-            stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-            stroke.Parent = f
-            f.Parent = MobAim.Gui
-            MobAim.Frame = f
-        end
-        local vs = cam.ViewportSize
-        local d = math.max(MobAim.Radius * 2, 2)
-        MobAim.Frame.Size = UDim2.fromOffset(d, d)
-        MobAim.Frame.Position = UDim2.fromOffset(vs.X * 0.5, vs.Y * 0.5)
-        MobAim.Frame.Visible = true
+        if not cam or not part or not part.Parent then return 1e9 end
+        local sp, on = cam:WorldToViewportPoint(part.Position)
+        if not on then return 1e9 end
+        local dx, dy = sp.X - cx, sp.Y - cy
+        return math.sqrt(dx * dx + dy * dy)
     end
 
     function mobUpdate()
@@ -4874,10 +4837,21 @@ end
         local cam = workspace.CurrentCamera
         if not cam then return end
         Camera = cam
-        mobCircle()
         local vs = cam.ViewportSize
         local cx, cy = vs.X * 0.5, vs.Y * 0.5
         local t, part = mobLocked()
+        if t and part then
+            -- держим, но рядом есть заметно ближе — переключаемся
+            local nt, np = mobFindBest(cx, cy)
+            if nt and nt ~= t then
+                local mLock = mobMagOf(part, cx, cy)
+                local mNew = mobMagOf(np, cx, cy)
+                if mNew + 60 < mLock then
+                    t, part = nt, np
+                    MobAim.LastTarget = nt
+                end
+            end
+        end
         if not t then
             t, part = mobFindBest(cx, cy)
             MobAim.LastTarget = t
@@ -7054,11 +7028,6 @@ local hubSuccess, hubErr = pcall(function()
         end
     })
     MobTab:Slider({
-        Title = "Aim Radius (px)",
-        Value = { Min = 60, Max = 400, Default = 160, Precision = 0 },
-        Callback = function(Value) MobAim.Radius = Value end
-    })
-    MobTab:Slider({
         Title = "Aim Power (%)",
         Value = { Min = 10, Max = 150, Default = 100, Precision = 0 },
         Callback = function(Value) MobAim.Power = Value end
@@ -7078,16 +7047,6 @@ local hubSuccess, hubErr = pcall(function()
         Desc = "OFF = aim through walls",
         Value = true,
         Callback = function(Value) MobAim.VisCheck = Value end
-    })
-    MobTab:Toggle({
-        Title = "Show Circle",
-        Value = true,
-        Callback = function(Value)
-            MobAim.ShowCircle = Value
-            if not Value and MobAim.Frame then
-                pcall(function() MobAim.Frame.Visible = false end)
-            end
-        end
     })
 
     -- ========== TAB: AUTO FARM ==========
