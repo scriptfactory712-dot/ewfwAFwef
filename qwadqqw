@@ -35,6 +35,8 @@
     PATCH 2026-09-23 — MOBILE AIM: мишень 140px+, sticky x1.6, приоритет после
       камеры, жёсткий lerp — не откидывает
     PATCH 2026-09-23 — MOBILE LOCK: взял голову — держит до смерти/ухода
+    PATCH 2026-09-23 — AIM DIAG: fallback центра на таче, счётчики pl/fov/blk,
+      ошибки в статус, NoWalls через счётчик
     PATCH 2026-09-23 — MOBILE FEEL: доводка долей угла как на ПК (без снапа),
       игнор цели за спиной
     PATCH 2026-09-23 — MOBILE FIX: Lock Through Walls (все цели), смена на
@@ -1090,6 +1092,7 @@ end
         Conn = nil, BeganConn = nil, EndedConn = nil,
         ZoneToggles = nil, ShootZoneToggles = nil, AimStatusRef = nil,
         AimFactionToggles = nil,
+        Dbg = { players = 0, fov = 0, blocked = 0, err = "", cx = -1, cy = -1 },
     }
     AimSys.RayParams = RaycastParams.new()
     AimSys.RayParams.IgnoreWater = true
@@ -1889,8 +1892,13 @@ end
         local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
         if not ok or not loc then return nil, nil, false end
         local x, y = loc.X, loc.Y
-        if x ~= x or y ~= y then return nil, nil, false end
-        if x < 0 or y < 0 or x > vs.X or y > vs.Y then return nil, nil, false end
+        -- Телефон без Mobile-режима: мышь врёт (0,0/статика) — берём центр экрана.
+        if x ~= x or y ~= y or x < 0 or y < 0 or x > vs.X or y > vs.Y then
+            if UserInputService.TouchEnabled then
+                return vs.X * 0.5, vs.Y * 0.5, true
+            end
+            return nil, nil, false
+        end
         return x, y, true
     end
 
@@ -2028,11 +2036,14 @@ end
     -- sticky-цель (держим прошлую) -> первый невидимый сквозь стены.
     function aimGetClosest()
         if not AimSys.Cfg.Enabled then return nil end
+        AimSys.Dbg.players, AimSys.Dbg.fov, AimSys.Dbg.blocked = 0, 0, 0
+        AimSys.Dbg.err = ""
         local cam = Camera or workspace.CurrentCamera
         if not cam then return nil end
         local camPos = cam.CFrame.Position
         local camLook = cam.CFrame.LookVector
         local crossX, crossY, okCross = aimCrosshairPos(UserInputService.MouseBehavior)
+        AimSys.Dbg.cx, AimSys.Dbg.cy = crossX or -1, crossY or -1
         if not okCross then return nil end
         aimCollectParts(AimSys.CheckParts)
         local myChar0 = LocalPlayer.Character
@@ -2068,6 +2079,7 @@ end
                 and aimFactionEnabled[getFaction(player)] then
                 local char, root = aimGetCharacter(player)
                 if char and root then
+                    AimSys.Dbg.players = AimSys.Dbg.players + 1
                     -- сидящего в машине корпус перекрывает: смотрим и позади камеры тоже
                     local seatedInCar = AimSys.Cfg.VehicleTargets and aimIsSeated(char)
                     if seatedInCar or camLook:Dot(root.Position - camPos) >= 0 then
@@ -2081,6 +2093,7 @@ end
                 end
             end
         end
+        AimSys.Dbg.fov = n
         if n == 0 then return nil end
         if n > 1 then aimSortCands(cands, n) end
         -- sticky из mainV1: прошлая цель в приоритете, если видима
@@ -2089,7 +2102,7 @@ end
             for i = 1, n do
                 local e = cands[i]
                 if e and e.ply == sticky then
-                    if e.seated or AimSys.Cfg.NoWalls or not aimOccluded(camPos, e.pos, e.char) then
+                    if aimVisDecision(camPos, e.pos, e.char, e.seated) then
                         return aimSetResult(e)
                     end
                     break
@@ -2099,7 +2112,7 @@ end
         local limit = math.min(n, AimSys.MaxCands)
         for i = 1, limit do
             local e = cands[i]
-            if e and (e.seated or AimSys.Cfg.NoWalls or not aimOccluded(camPos, e.pos, e.char)) then
+            if e and aimVisDecision(camPos, e.pos, e.char, e.seated) then
                 return aimSetResult(e)
             end
         end
@@ -2171,7 +2184,13 @@ end
     function aimGetCached()
         local now = os.clock()
         if AimSys.Cached and (now - AimSys.CachedTime) < 0.016 then return AimSys.Cached end
-        AimSys.Cached = aimGetClosest()
+        local ok, res = pcall(aimGetClosest)
+        if ok then
+            AimSys.Cached = res
+        else
+            AimSys.Cached = nil
+            AimSys.Dbg.err = tostring(res):sub(1, 120)
+        end
         AimSys.CachedTime = now
         return AimSys.Cached
     end
@@ -2234,7 +2253,13 @@ end
         return math.sqrt(dx * dx + dy * dy)
     end
 
-    -- Жёсткий лок для телефона: держим голову взятой цели напрямую,
+    -- Решение видимости со счётчиком для диагностики (blocked = за стенами).
+    function aimVisDecision(camPos, pos, char, seated)
+        if seated or AimSys.Cfg.NoWalls then return true end
+        local blocked = aimOccluded(camPos, pos, char)
+        if blocked then AimSys.Dbg.blocked = AimSys.Dbg.blocked + 1 end
+        return not blocked
+    end
     -- без перепоиска по пулу. Отпускает только если умерла/ушла/далеко.
     function aimGetLocked()
         local t = AimSys.State.LastTarget
@@ -2453,6 +2478,12 @@ end
                         end
                         body = "[AIM] ON [" .. mode .. "]\n[TARGET] " .. tgt
                             .. "\n[FOV] " .. tostring(AimSys.Cfg.Radius) .. "px"
+                            .. "\n[SCAN] pl " .. AimSys.Dbg.players .. " fov " .. AimSys.Dbg.fov
+                            .. " blk " .. AimSys.Dbg.blocked
+                            .. " @ " .. AimSys.Dbg.cx .. "," .. AimSys.Dbg.cy
+                        if AimSys.Dbg.err ~= "" then
+                            body = body .. "\n[ERR] " .. AimSys.Dbg.err
+                        end
                     end
                     if ref.SetDesc then ref:SetDesc(body)
                     elseif ref.SetContent then ref:SetContent(body) end
