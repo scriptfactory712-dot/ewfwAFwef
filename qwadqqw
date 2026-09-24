@@ -36,6 +36,8 @@
       камеры, жёсткий lerp — не откидывает
     PATCH 2026-09-23 — MOB TAB: отдельный Aimbot Mobile (центр, лок головы,
       свой круг, свой цикл; ПК-аим не тронут)
+    PATCH 2026-09-23 — PHONE FIX: прицел/наводка всегда по центру на таче
+      (фальшивая мышь экзекутора больше не уводит)
     PATCH 2026-09-23 — AIM DIAG: fallback центра на таче, счётчики pl/fov/blk,
       ошибки в статус, NoWalls через счётчик
     PATCH 2026-09-23 — MOBILE FEEL: доводка долей угла как на ПК (без снапа),
@@ -1887,7 +1889,10 @@ end
         local cam = Camera or workspace.CurrentCamera
         if not cam then return nil, nil, false end
         local vs = cam.ViewportSize
-        if AimSys.Cfg.Mobile or mouseBehavior == Enum.MouseBehavior.LockCenter then
+        -- Телефон определяется железно (тач есть, клавиатуры нет), а не только тоглом:
+        -- иначе фальшивая мышь экзекутора уводит прицел в никуда.
+        local touchMode = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+        if AimSys.Cfg.Mobile or touchMode or mouseBehavior == Enum.MouseBehavior.LockCenter then
             return vs.X * 0.5, vs.Y * 0.5, true
         end
         local ok, loc = pcall(function() return UserInputService:GetMouseLocation() end)
@@ -2153,7 +2158,8 @@ end
         local deltaX = dx * 0.2 * mult
         local deltaY = dy * 0.2 * mult
         if deltaX ~= deltaX or deltaY ~= deltaY then return end
-        if AimSys.Cfg.Mobile or typeof(mousemoverel) ~= "function" then
+        local touchMode = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+        if AimSys.Cfg.Mobile or touchMode or typeof(mousemoverel) ~= "function" then
             -- Мобильная доводка КАК НА ПК: тянем камеру на долю угла каждый кадр
             -- (плавно, без снапа). Упреждение для быстрых целей. Цель за спиной
             -- игнорируем, чтобы камеру не кувыркало.
