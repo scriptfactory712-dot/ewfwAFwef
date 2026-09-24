@@ -6422,6 +6422,10 @@ local hubSuccess, hubErr = pcall(function()
         Image = "rbxassetid://107066773482010",
         ImageSize = 60,
     })
+    HomeTab:Paragraph({
+        Title = "Build",
+        Desc = "2026-09-24-mobtab (11 tabs: Home ESP Wanted Aimbot AimbotMobile AutoFarm Visuals Anti Speed Liner Settings)",
+    })
 
     HomeTab:Section({ Title = "Session Info" })
     do
