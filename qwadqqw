@@ -35,6 +35,8 @@
     PATCH 2026-09-23 — MOBILE AIM: мишень 140px+, sticky x1.6, приоритет после
       камеры, жёсткий lerp — не откидывает
     PATCH 2026-09-23 — MOBILE LOCK: взял голову — держит до смерти/ухода
+    PATCH 2026-09-23 — MOBILE FEEL: доводка долей угла как на ПК (без снапа),
+      игнор цели за спиной
     PATCH 2026-09-23 — MOBILE FIX: Lock Through Walls (все цели), смена на
       ближнего, упреждение по движению
     PATCH 2026-09-22 12:44 — ВИДИМЫЕ УЛУЧШЕНИЯ:
@@ -2138,19 +2140,23 @@ end
         local deltaY = dy * 0.2 * mult
         if deltaX ~= deltaX or deltaY ~= deltaY then return end
         if AimSys.Cfg.Mobile or typeof(mousemoverel) ~= "function" then
-            -- плавная доводка камерой (телефон / нет mousemoverel): жёстко держит цель.
-            -- Упреждение по движению: быстрые цели (машины) не убегают из прицела.
+            -- Мобильная доводка КАК НА ПК: тянем камеру на долю угла каждый кадр
+            -- (плавно, без снапа). Упреждение для быстрых целей. Цель за спиной
+            -- игнорируем, чтобы камеру не кувыркало.
             local tp = targetPos
             pcall(function()
                 local v = part.AssemblyLinearVelocity
                 if v.Magnitude > 5 then tp = tp + v * 0.12 end
             end)
-            local k = math.clamp(mult * 0.4, 0.15, 0.8)
+            local pull = math.clamp(0.2 * mult, 0.05, 0.35)
             pcall(function()
                 local cc = Camera or workspace.CurrentCamera
-                if cc then
-                    cc.CFrame = cc.CFrame:Lerp(CFrame.lookAt(cc.CFrame.Position, tp), k)
-                end
+                if not cc then return end
+                local cf = cc.CFrame
+                local toT = tp - cf.Position
+                if toT.Magnitude < 1 then return end
+                if cf.LookVector:Dot(toT.Unit) < -0.2 then return end
+                cc.CFrame = cf:Lerp(CFrame.lookAt(cf.Position, tp), pull)
             end)
             return
         end
