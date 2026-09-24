@@ -35,6 +35,8 @@
     PATCH 2026-09-23 — MOBILE AIM: мишень 140px+, sticky x1.6, приоритет после
       камеры, жёсткий lerp — не откидывает
     PATCH 2026-09-23 — MOBILE LOCK: взял голову — держит до смерти/ухода
+    PATCH 2026-09-23 — MOBILE FIX: Lock Through Walls (все цели), смена на
+      ближнего, упреждение по движению
     PATCH 2026-09-22 12:44 — ВИДИМЫЕ УЛУЧШЕНИЯ:
       SPEED: BLIND R-HOLD 3+3 → 2+2с, HOLD 4.0 → 2.5с, VERIFY 8 → 4.5с (main.luau:2507,2559,2858)
       ACCURACY: CP_PASS_TOKENS + grant/clear/approved/pass, approach 7 → 5м, stats 10 → 5
@@ -1056,6 +1058,7 @@ end
             VehicleTargets = true, -- сидящие в машине: брать сквозь корпус авто
             Attraction = 200, Radius = 50, ShowCircle = true, -- mainV1: AttractionStrength / FOV/Radius / FOV/ShowCircle
             MaxDist = 400, -- радиус от игрока в метрах: дальше не целится
+            NoWalls = true, -- брать и за стенами тоже
             Mobile = false, -- режим телефона: центр экрана + плавная камера
             Damp = true, DampThreshold = 5, DampStrength = 5,
             Head = true, Torso = false, -- mainV1: Aim/TargetGroups
@@ -2084,7 +2087,7 @@ end
             for i = 1, n do
                 local e = cands[i]
                 if e and e.ply == sticky then
-                    if e.seated or not aimOccluded(camPos, e.pos, e.char) then
+                    if e.seated or AimSys.Cfg.NoWalls or not aimOccluded(camPos, e.pos, e.char) then
                         return aimSetResult(e)
                     end
                     break
@@ -2094,7 +2097,7 @@ end
         local limit = math.min(n, AimSys.MaxCands)
         for i = 1, limit do
             local e = cands[i]
-            if e and (e.seated or not aimOccluded(camPos, e.pos, e.char)) then
+            if e and (e.seated or AimSys.Cfg.NoWalls or not aimOccluded(camPos, e.pos, e.char)) then
                 return aimSetResult(e)
             end
         end
@@ -2135,12 +2138,18 @@ end
         local deltaY = dy * 0.2 * mult
         if deltaX ~= deltaX or deltaY ~= deltaY then return end
         if AimSys.Cfg.Mobile or typeof(mousemoverel) ~= "function" then
-            -- плавная доводка камерой (телефон / нет mousemoverel): жёстко держит цель
+            -- плавная доводка камерой (телефон / нет mousemoverel): жёстко держит цель.
+            -- Упреждение по движению: быстрые цели (машины) не убегают из прицела.
+            local tp = targetPos
+            pcall(function()
+                local v = part.AssemblyLinearVelocity
+                if v.Magnitude > 5 then tp = tp + v * 0.12 end
+            end)
             local k = math.clamp(mult * 0.4, 0.15, 0.8)
             pcall(function()
                 local cc = Camera or workspace.CurrentCamera
                 if cc then
-                    cc.CFrame = cc.CFrame:Lerp(CFrame.lookAt(cc.CFrame.Position, targetPos), k)
+                    cc.CFrame = cc.CFrame:Lerp(CFrame.lookAt(cc.CFrame.Position, tp), k)
                 end
             end)
             return
@@ -2208,6 +2217,17 @@ end
         end
     end
 
+    -- Удаление части от центра экрана (для смены цели на ближнюю).
+    function aimScreenMag(part)
+        local cam = Camera or workspace.CurrentCamera
+        if not cam or not part or not part.Parent then return 1e9 end
+        local vs = cam.ViewportSize
+        local sp, on = cam:WorldToViewportPoint(part.Position)
+        if not on then return 1e9 end
+        local dx, dy = sp.X - vs.X * 0.5, sp.Y - vs.Y * 0.5
+        return math.sqrt(dx * dx + dy * dy)
+    end
+
     -- Жёсткий лок для телефона: держим голову взятой цели напрямую,
     -- без перепоиска по пулу. Отпускает только если умерла/ушла/далеко.
     function aimGetLocked()
@@ -2244,7 +2264,27 @@ end
         if not active then aimClearState(false) return end
         local target = nil
         if AimSys.Cfg.Mobile then
-            target = aimGetLocked() or aimGetCached()
+            target = aimGetLocked()
+            if target then
+                -- лок далеко от центра, а в пуле есть вплотную — переключиться.
+                -- (часть запоминаем ДО вызова пула: пул пишет в ту же таблицу)
+                local lockedPart = target[3]
+                local alt = aimGetCached()
+                if alt and alt[3] ~= lockedPart then
+                    local m1 = aimScreenMag(lockedPart)
+                    local m2 = aimScreenMag(alt[3])
+                    if m2 < AimSys.Cfg.Radius * 0.5 and m1 > AimSys.Cfg.Radius then
+                        target = alt
+                    else
+                        -- пул перезаписал таблицу: вернуть лок обратно
+                        AimSys.Result[1], AimSys.Result[2], AimSys.Result[3] =
+                            AimSys.State.LastTarget, lockedPart.Parent, lockedPart
+                        target = AimSys.Result
+                    end
+                end
+            else
+                target = aimGetCached()
+            end
         else
             target = aimGetCached()
         end
@@ -6604,6 +6644,12 @@ local hubSuccess, hubErr = pcall(function()
         Title = "Visibility Check (Raycast сквозь стены — нет)",
         Value = true,
         Callback = function(Value) AimSys.Cfg.VisCheck = Value end
+    })
+    AimTab:Toggle({
+        Title = "Lock Through Walls",
+        Desc = "Target everyone, even in cover",
+        Value = true,
+        Callback = function(Value) AimSys.Cfg.NoWalls = Value end
     })
     AimTab:Toggle({
         Title = "Цели в машине (сквозь корпус авто)",
